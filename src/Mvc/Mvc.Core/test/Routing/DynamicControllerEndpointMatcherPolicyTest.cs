@@ -573,6 +573,50 @@ public class DynamicControllerEndpointMatcherPolicyTest
             resolved.Metadata.GetOrderedMetadata<MetadataMarker>());
     }
 
+    [Fact]
+    public async Task ApplyAsync_DoesNotCopyDynamicMetadata_IntoExpandedEndpoints()
+    {
+        // Arrange
+        var policy = new DynamicControllerEndpointMatcherPolicy(SelectorCache, Comparer);
+
+        var dynamicEndpoint = CreateDynamicEndpoint(new MetadataMarker("from-dynamic"));
+
+        var endpoints = new[] { dynamicEndpoint, };
+        var values = new RouteValueDictionary[] { null, };
+        var scores = new[] { 0, };
+
+        var candidates = new CandidateSet(endpoints, values, scores);
+
+        Transform = (c, values, state) =>
+        {
+            return new ValueTask<RouteValueDictionary>(new RouteValueDictionary(new
+            {
+                controller = "Home",
+                action = "Index",
+            }));
+        };
+
+        Filter = (c, values, state, endpoints) => new ValueTask<IReadOnlyList<Endpoint>>(new[]
+        {
+                ControllerEndpoints[1], ControllerEndpoints[2]
+            });
+
+        var httpContext = new DefaultHttpContext()
+        {
+            RequestServices = Services,
+        };
+
+        // Act
+        await policy.ApplyAsync(httpContext, candidates);
+
+        // Assert
+        // The expanded candidates must not look dynamic. Otherwise the policy would re-process them
+        // within the same ApplyAsync pass and repeatedly ExpandEndpoint (unbounded growth / throw).
+        Assert.Equal(2, candidates.Count);
+        Assert.Null(candidates[0].Endpoint.Metadata.GetMetadata<IDynamicEndpointMetadata>());
+        Assert.Null(candidates[1].Endpoint.Metadata.GetMetadata<IDynamicEndpointMetadata>());
+    }
+
     private Endpoint CreateDynamicEndpoint(params object[] extraMetadata)
     {
         var metadata = new List<object>
