@@ -310,6 +310,108 @@ public class ForwardedHeadersMiddlewareTests
     }
 
     [Fact]
+    public async Task XForwardedForWithKnownProxiesFailsClosedWhenNoRemoteIp()
+    {
+        using var host = new HostBuilder()
+            .ConfigureWebHost(webHostBuilder =>
+            {
+                webHostBuilder
+                .UseTestServer()
+                .Configure(app =>
+                {
+                    var options = new ForwardedHeadersOptions
+                    {
+                        ForwardedHeaders = ForwardedHeaders.XForwardedFor,
+                    };
+                    options.KnownProxies.Add(IPAddress.Parse("10.0.0.1"));
+                    app.UseForwardedHeaders(options);
+                });
+            }).Build();
+
+        await host.StartAsync();
+
+        var server = host.GetTestServer();
+
+        var context = await server.SendAsync(c =>
+        {
+            c.Request.Headers["X-Forwarded-For"] = "11.111.111.11:12345";
+            // No RemoteIpAddress is set, e.g. a request arriving over a Unix socket or named pipe.
+            c.Connection.RemoteIpAddress = null;
+        });
+
+        // The forwarded header must be ignored because the peer cannot be attested as a known proxy.
+        Assert.Null(context.Connection.RemoteIpAddress);
+        Assert.Equal("11.111.111.11:12345", context.Request.Headers["X-Forwarded-For"].ToString());
+        Assert.Equal(string.Empty, context.Request.Headers["X-Original-For"].ToString());
+    }
+
+    [Fact]
+    public async Task XForwardedForWithKnownNetworksFailsClosedWhenNoRemoteIp()
+    {
+        using var host = new HostBuilder()
+            .ConfigureWebHost(webHostBuilder =>
+            {
+                webHostBuilder
+                .UseTestServer()
+                .Configure(app =>
+                {
+                    var options = new ForwardedHeadersOptions
+                    {
+                        ForwardedHeaders = ForwardedHeaders.XForwardedFor,
+                    };
+                    options.KnownIPNetworks.Add(new System.Net.IPNetwork(IPAddress.Parse("10.0.0.0"), 8));
+                    app.UseForwardedHeaders(options);
+                });
+            }).Build();
+
+        await host.StartAsync();
+
+        var server = host.GetTestServer();
+
+        var context = await server.SendAsync(c =>
+        {
+            c.Request.Headers["X-Forwarded-For"] = "11.111.111.11:12345";
+            c.Connection.RemoteIpAddress = null;
+        });
+
+        Assert.Null(context.Connection.RemoteIpAddress);
+        Assert.Equal("11.111.111.11:12345", context.Request.Headers["X-Forwarded-For"].ToString());
+    }
+
+    [Fact]
+    public async Task XForwardedForWithoutKnownProxiesStillAppliesWhenNoRemoteIp()
+    {
+        using var host = new HostBuilder()
+            .ConfigureWebHost(webHostBuilder =>
+            {
+                webHostBuilder
+                .UseTestServer()
+                .Configure(app =>
+                {
+                    // No KnownProxies/KnownNetworks configured, so enforcement is not requested and the
+                    // forwarded header is applied even without a peer IP (unchanged behavior).
+                    app.UseForwardedHeaders(new ForwardedHeadersOptions
+                    {
+                        ForwardedHeaders = ForwardedHeaders.XForwardedFor,
+                    });
+                });
+            }).Build();
+
+        await host.StartAsync();
+
+        var server = host.GetTestServer();
+
+        var context = await server.SendAsync(c =>
+        {
+            c.Request.Headers["X-Forwarded-For"] = "11.111.111.11:12345";
+            c.Connection.RemoteIpAddress = null;
+        });
+
+        Assert.Equal("11.111.111.11", context.Connection.RemoteIpAddress.ToString());
+        Assert.Equal(12345, context.Connection.RemotePort);
+    }
+
+    [Fact]
     public async Task XForwardedForOverrideBadIpDoesntChangeRemoteIp()
     {
         using var host = new HostBuilder()
